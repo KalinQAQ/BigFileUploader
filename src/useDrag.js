@@ -61,8 +61,11 @@ function useDrag(uploadContainerRef) {
       uploadContainer.removeEventListener("dragleave", handleDrag);
     };
   }, []);
-
-  return { selectedFile, filePreview };
+  const resetFileStatus = () => {
+    setSelectedFile(null);
+    setFilePreview({ url: null, type: null });
+  };
+  return { selectedFile, filePreview, resetFileStatus };
 }
 
 export default useDrag;
