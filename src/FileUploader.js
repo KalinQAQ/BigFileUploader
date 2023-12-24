@@ -1,8 +1,8 @@
 import { InboxOutlined } from "@ant-design/icons";
 import "./FileUploader.css";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useDrag from "./useDrag";
-import { Button, message, Progress } from "antd";
+import { Button, message, Progress, Spin } from "antd";
 import { CHUNK_SIZE } from "./constant";
 import axios from "axios";
 import axiosInstance from "./axiosInstance";
@@ -20,6 +20,13 @@ function FileUploader() {
   const [uploadStatus, setUploadStatus] = useState(UploadStatus.NOT_STARTED);
   // 存放所有上传请求的取消token
   const [cancelTokens, setCancelTokens] = useState([]);
+  const [filenameWorker, setFilenameWorker] = useState(null);
+  const [isCalculatingFileName, setIsCalculatingFileName] = useState(false);
+
+  useEffect(() => {
+    const filenameWorker = new Worker("/filenameWorker.js");
+    setFilenameWorker(filenameWorker);
+  }, []);
 
   function resetAllStatus() {
     resetFileStatus();
@@ -32,14 +39,20 @@ function FileUploader() {
       return;
     }
     setUploadStatus(UploadStatus.UPLOADING);
-    const filename = await getFileName(selectedFile);
-    await uploadFile(
-      selectedFile,
-      filename,
-      setUploadProgress,
-      resetAllStatus,
-      setCancelTokens
-    );
+    //向WebWorker发送一个消息，让他帮助计算文件对应的文件名
+    filenameWorker.postMessage(selectedFile);
+    setIsCalculatingFileName(true);
+    //监听WebWorker发过来的的消息，接收计算好的文件名
+    filenameWorker.onmessage = async (event) => {
+      setIsCalculatingFileName(false);
+      await uploadFile(
+        selectedFile,
+        event.data,
+        setUploadProgress,
+        resetAllStatus,
+        setCancelTokens
+      );
+    };
   };
   const pauseUpload = async () => {
     setUploadStatus(UploadStatus.PAUSED);
@@ -55,6 +68,8 @@ function FileUploader() {
         return <Button onClick={pauseUpload}>暂停</Button>;
       case UploadStatus.PAUSED:
         return <Button onClick={handleUpload}>恢复上传</Button>;
+      default:
+        return <></>;
     }
   };
   const renderProgress = () => {
@@ -71,6 +86,9 @@ function FileUploader() {
       return (
         <>
           {totalProgress}
+          {isCalculatingFileName && (
+            <Spin tip={<span>正在计算文件名...</span>}></Spin>
+          )}
           {chunkProgresses}
         </>
       );
@@ -241,36 +259,6 @@ function createFileChunks(file, filename) {
     });
   }
   return chunks;
-}
-/**
- * 根据文件对象获取文件内容得到的hash文件名
- * @param {*} file 文件对象
- */
-async function getFileName(file) {
-  // 计算此文件的hash值
-  const fileHash = await calculateFileHash(file);
-  // 获取文件扩展名
-  const fileExtension = file.name.split(".").pop();
-  return `${fileHash}.${fileExtension}`;
-}
-/**
- * 计算文件的hash字符串
- * @param {*} file 文件对象
- */
-async function calculateFileHash(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
-  return BufferToHex(hashBuffer);
-}
-/**
- * 把ArrayBuffer转成16进制的字符串
- * @param {*} buffer
- * @returns
- */
-function BufferToHex(buffer) {
-  return Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 /**
  * 显示文件的预览信息
