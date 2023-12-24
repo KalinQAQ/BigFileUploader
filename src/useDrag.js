@@ -61,6 +61,20 @@ function useDrag(uploadContainerRef) {
       uploadContainer.removeEventListener("dragleave", handleDrag);
     };
   }, []);
+  useEffect(() => {
+    const uploadContainer = uploadContainerRef.current;
+    uploadContainer.addEventListener("click", () => {
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.style.display = "none";
+      fileInput.addEventListener("change", (event) => {
+        checkFile(event.target.files);
+      });
+      document.body.appendChild(fileInput);
+      //手动触发文件的选择
+      fileInput.click();
+    });
+  }, []);
   const resetFileStatus = () => {
     setSelectedFile(null);
     setFilePreview({ url: null, type: null });
