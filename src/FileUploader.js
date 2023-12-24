@@ -113,7 +113,8 @@ function createRequest(
   chunk,
   setUploadProgress,
   cancelToken,
-  start
+  start,
+  totalSize
 ) {
   return axiosInstance.post(`/upload/${filename}`, chunk, {
     headers: {
@@ -124,11 +125,11 @@ function createRequest(
       start, // 把写入文件的其实位置作为查询参数发给服务器
     },
 
-    // 上传进度发生变化的事件回调函数
+    // 上传进度发生变R化的事件回调函数
     onUploadProgress: (ProgressEvent) => {
       // 用已经上传的字节数 / 总字节数 = 完成的百分比
       const percentCompleted = Math.round(
-        (ProgressEvent.loaded * 100) / ProgressEvent.total
+        (ProgressEvent.loaded + start * 100) / totalSize
       );
       setUploadProgress((prevProgress) => ({
         ...prevProgress,
@@ -160,16 +161,14 @@ async function uploadFile(
   // 把大文件进行切片
   const chunks = createFileChunks(file, filename);
   const newCancelTokens = [];
-  const newUploadProgress = {};
   // 实现并行上传
   const requests = chunks.map(({ chunk, chunkFileName }) => {
     const cancelToken = axios.CancelToken.source();
     newCancelTokens.push(cancelToken);
-    newUploadProgress[chunkFileName] = 0;
     // 向服务器传送的数据可能就不再是完整的分片数据
     // 判断当前的分片是否是以及上传过服务器了
     const existingChunk = uploadedChunkList.find((uploadedChunk) => {
-      return uploadedChunk.chunkFileName == chunkFileName;
+      return uploadedChunk.chunkFileName === chunkFileName;
     });
     // 已经上传过一部分/全部上传过了
     if (existingChunk) {
@@ -179,30 +178,39 @@ async function uploadFile(
       const remainingChunk = chunk.slice(uploadedSize);
       // 如果剩下数据为0，说明完全上传完毕
       if (remainingChunk.size === 0) {
+        setUploadProgress((prevProgress) => ({
+          ...prevProgress,
+          [chunkFileName]: 100,
+        }));
         return Promise.resolve();
-      } else {
-        // total:100字节，已经传60字节，写入文件的起始索引60
-        return createRequest(
-          filename,
-          chunkFileName,
-          remainingChunk,
-          setUploadProgress,
-          cancelToken,
-          uploadedSize
-        );
       }
+      // total:100字节，已经传60字节，写入文件的起始索引60
+      setUploadProgress((prevProgress) => ({
+        ...prevProgress,
+        [chunkFileName]: (uploadedSize * 100) / chunk.size,
+      }));
+      return createRequest(
+        filename,
+        chunkFileName,
+        remainingChunk,
+        setUploadProgress,
+        cancelToken,
+        uploadedSize,
+        chunk.size
+      );
+    } else {
+      return createRequest(
+        filename,
+        chunkFileName,
+        chunk,
+        setUploadProgress,
+        cancelToken,
+        0,
+        chunk.size
+      );
     }
-    return createRequest(
-      filename,
-      chunkFileName,
-      chunk,
-      setUploadProgress,
-      cancelToken,
-      0
-    );
   });
   setCancelTokens(newCancelTokens);
-  setUploadProgress(newUploadProgress);
   try {
     // 并行上传每个分片
     await Promise.all(requests);
