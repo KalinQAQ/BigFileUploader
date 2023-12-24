@@ -3,7 +3,7 @@ import "./FileUploader.css";
 import { useEffect, useRef, useState } from "react";
 import useDrag from "./useDrag";
 import { Button, message, Progress, Spin } from "antd";
-import { CHUNK_SIZE } from "./constant";
+import { CHUNK_SIZE, MAX_RETRIES } from "./constant";
 import axios from "axios";
 import axiosInstance from "./axiosInstance";
 const UploadStatus = {
@@ -87,7 +87,9 @@ function FileUploader() {
         <>
           {totalProgress}
           {isCalculatingFileName && (
-            <Spin tip={<span>正在计算文件名...</span>}></Spin>
+            <Spin tip={<span>正在计算文件名...</span>}>
+              <span>正在计算文件名...</span>
+            </Spin>
           )}
           {chunkProgresses}
         </>
@@ -167,7 +169,8 @@ async function uploadFile(
   filename,
   setUploadProgress,
   resetAllStatus,
-  setCancelTokens
+  setCancelTokens,
+  retryCount = 0
 ) {
   const { needUpload, uploadedChunkList } = await axiosInstance.get(
     `/verify/${filename}`
@@ -176,25 +179,25 @@ async function uploadFile(
     message.success(`文件已存在，秒传成功`);
     return resetAllStatus();
   }
-  // 把大文件进行切片
+  //把在文件进行切片
   const chunks = createFileChunks(file, filename);
   const newCancelTokens = [];
-  // 实现并行上传
+  //实现并行上传
   const requests = chunks.map(({ chunk, chunkFileName }) => {
     const cancelToken = axios.CancelToken.source();
     newCancelTokens.push(cancelToken);
-    // 向服务器传送的数据可能就不再是完整的分片数据
-    // 判断当前的分片是否是以及上传过服务器了
+    //以后往服务器发送的数据可能就不再是完整的分片的数据
+    //判断当前的分片是否是已经上传过服务器了,
     const existingChunk = uploadedChunkList.find((uploadedChunk) => {
       return uploadedChunk.chunkFileName === chunkFileName;
     });
-    // 已经上传过一部分/全部上传过了
+    //如果存在existingChunk，说明此分片已经上传过一部分了，或者说已经完全 上传完成
     if (existingChunk) {
-      // 获取已经上传的分片的大小
+      //获取已经上传的分片的大小，上次结束的位置 是不是就是下次开始的位置
       const uploadedSize = existingChunk.size;
-      // 从chunk中进行截取，
+      //从chunk中进行截取，过滤掉已经上传过的大小,得到剩下需要继续上传的内容
       const remainingChunk = chunk.slice(uploadedSize);
-      // 如果剩下数据为0，说明完全上传完毕
+      //如果剩下的数据为0，说明完全 上传完毕
       if (remainingChunk.size === 0) {
         setUploadProgress((prevProgress) => ({
           ...prevProgress,
@@ -202,7 +205,9 @@ async function uploadFile(
         }));
         return Promise.resolve();
       }
-      // total:100字节，已经传60字节，写入文件的起始索引60
+      // 100个字节，第一次上传的时候60个字节，暂停了
+      //下次再传的是传剩下的40字节，从哪个位置开始写，要从上次结束的位置 ，也就是60开始写
+      //如果剩下的数据还有，则需要继续上传剩余的部分 总计100字节，已经传60字节，继续传剩下的40个字节，写入文件的起始索引60
       setUploadProgress((prevProgress) => ({
         ...prevProgress,
         [chunkFileName]: (uploadedSize * 100) / chunk.size,
@@ -230,20 +235,33 @@ async function uploadFile(
   });
   setCancelTokens(newCancelTokens);
   try {
-    // 并行上传每个分片
+    //并行上传每个分片
     await Promise.all(requests);
-    // 等全部的分片上传完了，会向服务器发送一个合并文件的请求
+    //等全部的分片上传完了，会向服务器发送一个合并文件的请求
     await axiosInstance.get(`/merge/${filename}`);
     message.success("文件上传完成");
     resetAllStatus();
   } catch (error) {
-    // 用户主动点击了暂停的按钮，暂停上传
+    //如果是由于用户主动点击了暂停的按钮，暂停了上传
     if (axios.isCancel(error)) {
       console.log("上传暂停", error);
       message.warning("上传暂停");
+    } else {
+      if (retryCount < MAX_RETRIES) {
+        console.log(`上传出错了，重试中...`);
+        uploadFile(
+          file,
+          filename,
+          setUploadProgress,
+          resetAllStatus,
+          setCancelTokens,
+          retryCount + 1
+        );
+      } else {
+        console.log("上传出错", error);
+        message.error("上传出错");
+      }
     }
-    console.log("上传出错", error);
-    message.error("上传出错");
   }
 }
 function createFileChunks(file, filename) {
