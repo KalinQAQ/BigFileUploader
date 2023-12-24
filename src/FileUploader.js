@@ -112,7 +112,8 @@ function createRequest(
   chunkFileName,
   chunk,
   setUploadProgress,
-  cancelToken
+  cancelToken,
+  start
 ) {
   return axiosInstance.post(`/upload/${filename}`, chunk, {
     headers: {
@@ -120,6 +121,7 @@ function createRequest(
     },
     params: {
       chunkFileName,
+      start, // 把写入文件的其实位置作为查询参数发给服务器
     },
 
     // 上传进度发生变化的事件回调函数
@@ -148,7 +150,9 @@ async function uploadFile(
   resetAllStatus,
   setCancelTokens
 ) {
-  const { needUpload } = await axiosInstance.get(`/verify/${filename}`);
+  const { needUpload, uploadedChunkList } = await axiosInstance.get(
+    `/verify/${filename}`
+  );
   if (!needUpload) {
     message.success(`文件已存在，秒传成功`);
     return resetAllStatus();
@@ -162,12 +166,39 @@ async function uploadFile(
     const cancelToken = axios.CancelToken.source();
     newCancelTokens.push(cancelToken);
     newUploadProgress[chunkFileName] = 0;
+    // 向服务器传送的数据可能就不再是完整的分片数据
+    // 判断当前的分片是否是以及上传过服务器了
+    const existingChunk = uploadedChunkList.find((uploadedChunk) => {
+      return uploadedChunk.chunkFileName == chunkFileName;
+    });
+    // 已经上传过一部分/全部上传过了
+    if (existingChunk) {
+      // 获取已经上传的分片的大小
+      const uploadedSize = existingChunk.size;
+      // 从chunk中进行截取，
+      const remainingChunk = chunk.slice(uploadedSize);
+      // 如果剩下数据为0，说明完全上传完毕
+      if (remainingChunk.size === 0) {
+        return Promise.resolve();
+      } else {
+        // total:100字节，已经传60字节，写入文件的起始索引60
+        return createRequest(
+          filename,
+          chunkFileName,
+          remainingChunk,
+          setUploadProgress,
+          cancelToken,
+          uploadedSize
+        );
+      }
+    }
     return createRequest(
       filename,
       chunkFileName,
       chunk,
       setUploadProgress,
-      cancelToken
+      cancelToken,
+      0
     );
   });
   setCancelTokens(newCancelTokens);
